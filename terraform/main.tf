@@ -3,14 +3,14 @@ terraform {
   required_providers {
     aws = { source = "hashicorp/aws", version = "~> 5.0" }
   }
-  # Enable after creating the S3 bucket + DynamoDB table:
-  # backend "s3" {
-  #   bucket         = "your-tfstate-bucket"
-  #   key            = "iam-automation/terraform.tfstate"
-  #   region         = "ap-south-1"
-  #   dynamodb_table = "tf-lock"
-  #   encrypt        = true
-  # }
+  #Enable after creating the S3 bucket + DynamoDB table:
+  backend "s3" {
+    bucket         = "ankan-tfstate-2026"
+    key            = "iam-automation/terraform.tfstate"
+    region         = "ap-south-1"
+    dynamodb_table = "tf-lock"
+    encrypt        = true
+  }
 }
 
 provider "aws" {
@@ -52,13 +52,13 @@ resource "aws_iam_group_policy_attachment" "this" {
 
 # Force MFA-friendly strong password policy
 resource "aws_iam_account_password_policy" "strict" {
-  minimum_password_length = 14
-  require_symbols         = true
-  require_numbers         = true
+  minimum_password_length      = 14
+  require_symbols              = true
+  require_numbers              = true
   require_uppercase_characters = true
   require_lowercase_characters = true
-  max_password_age        = 90
-  password_reuse_prevention = 5
+  max_password_age             = 90
+  password_reuse_prevention    = 5
 }
 
 # Audit: CloudTrail + SNS alerts
