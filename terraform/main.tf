@@ -3,7 +3,7 @@ terraform {
   required_providers {
     aws = { source = "hashicorp/aws", version = "~> 5.0" }
   }
-  #Enable after creating the S3 bucket + DynamoDB table:
+  # Remote state: S3 for storage, DynamoDB for locking
   backend "s3" {
     bucket         = "ankan-tfstate-2026"
     key            = "iam-automation/terraform.tfstate"
@@ -15,6 +15,12 @@ terraform {
 
 provider "aws" {
   region = var.region
+}
+
+# IAM events are delivered to us-east-1, so audit resources use this provider
+provider "aws" {
+  alias  = "use1"
+  region = "us-east-1"
 }
 
 variable "region" {
@@ -50,7 +56,7 @@ resource "aws_iam_group_policy_attachment" "this" {
   policy_arn = each.value.arn
 }
 
-# Force MFA-friendly strong password policy
+# Strong password rules (note: this does not enforce MFA)
 resource "aws_iam_account_password_policy" "strict" {
   minimum_password_length      = 14
   require_symbols              = true
@@ -61,13 +67,15 @@ resource "aws_iam_account_password_policy" "strict" {
   password_reuse_prevention    = 5
 }
 
-# Audit: CloudTrail + SNS alerts
+# Audit: EventBridge rule -> SNS email alert (all in us-east-1)
 resource "aws_sns_topic" "iam_alerts" {
-  name = "iam-user-changes"
+  provider = aws.use1
+  name     = "iam-user-changes"
 }
 
 resource "aws_cloudwatch_event_rule" "iam_changes" {
-  name = "iam-user-create-delete"
+  provider = aws.use1
+  name     = "iam-user-create-delete"
   event_pattern = jsonencode({
     source        = ["aws.iam"]
     "detail-type" = ["AWS API Call via CloudTrail"]
@@ -76,12 +84,14 @@ resource "aws_cloudwatch_event_rule" "iam_changes" {
 }
 
 resource "aws_cloudwatch_event_target" "sns" {
-  rule = aws_cloudwatch_event_rule.iam_changes.name
-  arn  = aws_sns_topic.iam_alerts.arn
+  provider = aws.use1
+  rule     = aws_cloudwatch_event_rule.iam_changes.name
+  arn      = aws_sns_topic.iam_alerts.arn
 }
 
 resource "aws_sns_topic_policy" "allow_events" {
-  arn = aws_sns_topic.iam_alerts.arn
+  provider = aws.use1
+  arn      = aws_sns_topic.iam_alerts.arn
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
@@ -91,4 +101,81 @@ resource "aws_sns_topic_policy" "allow_events" {
       Resource  = aws_sns_topic.iam_alerts.arn
     }]
   })
+}
+
+# CloudTrail: required for IAM events to reach EventBridge
+data "aws_caller_identity" "current" {}
+
+locals {
+  trail_name = "iam-audit-trail"
+  trail_arn  = "arn:aws:cloudtrail:us-east-1:${data.aws_caller_identity.current.account_id}:trail/iam-audit-trail"
+}
+
+resource "aws_s3_bucket" "trail_logs" {
+  provider      = aws.use1
+  bucket        = "ankan-iam-audit-logs-${data.aws_caller_identity.current.account_id}"
+  force_destroy = true # lets terraform destroy remove it on cleanup
+}
+
+resource "aws_s3_bucket_public_access_block" "trail_logs" {
+  provider                = aws.use1
+  bucket                  = aws_s3_bucket.trail_logs.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+data "aws_iam_policy_document" "trail_bucket" {
+  statement {
+    sid       = "AWSCloudTrailAclCheck"
+    actions   = ["s3:GetBucketAcl"]
+    resources = [aws_s3_bucket.trail_logs.arn]
+    principals {
+      type        = "Service"
+      identifiers = ["cloudtrail.amazonaws.com"]
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "aws:SourceArn"
+      values   = [local.trail_arn]
+    }
+  }
+
+  statement {
+    sid       = "AWSCloudTrailWrite"
+    actions   = ["s3:PutObject"]
+    resources = ["${aws_s3_bucket.trail_logs.arn}/AWSLogs/${data.aws_caller_identity.current.account_id}/*"]
+    principals {
+      type        = "Service"
+      identifiers = ["cloudtrail.amazonaws.com"]
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "s3:x-amz-acl"
+      values   = ["bucket-owner-full-control"]
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "aws:SourceArn"
+      values   = [local.trail_arn]
+    }
+  }
+}
+
+resource "aws_s3_bucket_policy" "trail_logs" {
+  provider = aws.use1
+  bucket   = aws_s3_bucket.trail_logs.id
+  policy   = data.aws_iam_policy_document.trail_bucket.json
+}
+
+resource "aws_cloudtrail" "iam_audit" {
+  provider                      = aws.use1
+  name                          = local.trail_name
+  s3_bucket_name                = aws_s3_bucket.trail_logs.id
+  include_global_service_events = true
+  is_multi_region_trail         = true
+  enable_logging                = true
+
+  depends_on = [aws_s3_bucket_policy.trail_logs]
 }
