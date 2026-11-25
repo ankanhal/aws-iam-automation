@@ -179,3 +179,47 @@ resource "aws_cloudtrail" "iam_audit" {
 
   depends_on = [aws_s3_bucket_policy.trail_logs]
 }
+
+# GitHub Actions OIDC: the pipeline logs in to AWS without stored keys
+resource "aws_iam_openid_connect_provider" "github" {
+  url            = "https://token.actions.githubusercontent.com"
+  client_id_list = ["sts.amazonaws.com"]
+  # Thumbprint is no longer validated by AWS for this provider, but the
+  # argument is still accepted by older provider versions.
+  thumbprint_list = ["6938fd4d98bab03faadb97b34396831e3780aea1"]
+}
+
+data "aws_iam_policy_document" "github_trust" {
+  statement {
+    actions = ["sts:AssumeRoleWithWebIdentity"]
+    principals {
+      type        = "Federated"
+      identifiers = [aws_iam_openid_connect_provider.github.arn]
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "token.actions.githubusercontent.com:aud"
+      values   = ["sts.amazonaws.com"]
+    }
+    condition {
+      test     = "StringLike"
+      variable = "token.actions.githubusercontent.com:sub"
+      values   = ["repo:ankanhal/aws-iam-automation:*"]
+    }
+  }
+}
+
+resource "aws_iam_role" "github_actions" {
+  name               = "github-actions-terraform"
+  assume_role_policy = data.aws_iam_policy_document.github_trust.json
+}
+
+# Sandbox shortcut. In a real company, scope this down to what Terraform needs.
+resource "aws_iam_role_policy_attachment" "github_actions_admin" {
+  role       = aws_iam_role.github_actions.name
+  policy_arn = "arn:aws:iam::aws:policy/AdministratorAccess"
+}
+
+output "github_actions_role_arn" {
+  value = aws_iam_role.github_actions.arn
+}
