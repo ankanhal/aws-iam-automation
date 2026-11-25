@@ -39,3 +39,36 @@ read the error from boto3.
 **Planned fix:** In `onboard.py`, catch the error, call `restore_secret`, then
 `put_secret_value` with the new password. A 7-day recovery window is kept
 on purpose, so an accidental offboarding can be undone.
+
+### 2. IAM user create/delete alerts never arrived
+
+**What happened:** I built an alert chain (EventBridge rule, SNS topic, email).
+After `terraform apply` I created and deleted IAM users, but no email arrived.
+
+**Why (two separate causes):**
+1. **Wrong region.** IAM is a global service and its events are delivered in
+   us-east-1. My rule and SNS topic were in Mumbai (ap-south-1), so the rule
+   never saw a `CreateUser` event.
+2. **Missing CloudTrail trail.** Even in us-east-1, the rule stayed silent
+   until a CloudTrail trail was logging management events. AWS documents that
+   a trail must be enabled in the same region as the rule.
+
+**How I found it:** I tested each link of the chain separately:
+- Published a test message straight to SNS: the email arrived, so the topic,
+  subscription and topic policy were fine.
+- Checked the rule and target with `aws events describe-rule` and
+  `list-targets-by-rule`: both were correct.
+- Checked the rule's `MatchedEvents` metric: empty, so the rule never
+  received an event.
+- Checked CloudTrail Trails: the list was empty.
+
+**Fix:**
+- Added a second Terraform provider (`alias = "use1"`, region us-east-1) and
+  moved the SNS topic, rule, target and topic policy to it.
+- Added a CloudTrail trail, its S3 log bucket and bucket policy in Terraform.
+- Re-tested with a brand-new username: `CreateUser` and `DeleteUser` emails
+  both arrived.
+
+**Lesson:** When an alert chain is silent, test each link on its own instead
+of guessing. Also, check the cloud provider's docs for global-service
+behaviour before assuming a region.
