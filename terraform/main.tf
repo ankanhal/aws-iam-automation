@@ -204,7 +204,10 @@ data "aws_iam_policy_document" "github_trust" {
     condition {
       test     = "StringLike"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = ["repo:ankanhal/aws-iam-automation:*"]
+      values = [
+        "repo:ankanhal@284026785/aws-iam-automation@1470866805:*",
+        "repo:ankanhal/aws-iam-automation:*",
+      ]
     }
   }
 }
