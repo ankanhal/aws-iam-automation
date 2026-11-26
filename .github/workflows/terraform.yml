@@ -1,5 +1,6 @@
 name: terraform
 on:
+  workflow_dispatch:
   pull_request:
     paths: ["terraform/**"]
   push:
@@ -7,7 +8,7 @@ on:
     paths: ["terraform/**"]
 
 permissions:
-  id-token: write   # OIDC, no long-lived AWS keys in GitHub
+  id-token: write   # needed for OIDC
   contents: read
 
 jobs:
@@ -19,6 +20,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: hashicorp/setup-terraform@v3
+
+      - name: Show OIDC claims (temporary debug)
+        working-directory: .
+        run: |
+          TOKEN=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com" | jq -r .value)
+          python3 -c "import sys,json,base64; p=sys.argv[1].split('.')[1]; p+='='*(-len(p)%4); d=json.loads(base64.urlsafe_b64decode(p)); print({k:d.get(k) for k in ('sub','aud','iss')})" "$TOKEN"
+
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
