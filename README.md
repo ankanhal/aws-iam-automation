@@ -72,3 +72,22 @@ After `terraform apply` I created and deleted IAM users, but no email arrived.
 **Lesson:** When an alert chain is silent, test each link on its own instead
 of guessing. Also, check the cloud provider's docs for global-service
 behaviour before assuming a region.
+
+### 3. GitHub Actions could not assume the AWS role (OIDC)
+
+**What happened:** The pipeline failed at the AWS login step with
+`Not authorized to perform sts:AssumeRoleWithWebIdentity`, and AWS gave no
+reason (CloudTrail showed AccessDenied with null request parameters).
+
+**Why:** My role's trust policy expected the subject `repo:<user>/<repo>:*`,
+but GitHub's token carried numeric owner and repo IDs in the subject, so the
+pattern never matched.
+
+**How I found it:** I added a temporary workflow step that printed the token's
+`sub`, `aud` and `iss` claims and compared them with the trust policy.
+
+**Fix:** Updated the trust policy condition in Terraform to match the exact
+subject format, still restricted to my repository. Then removed the debug step.
+
+**Lesson:** When a login fails with no reason, inspect what the other side is
+actually sending instead of re-checking what you configured.
